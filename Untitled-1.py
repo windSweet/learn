@@ -173,3 +173,6 @@ root = tk.Tk()
 root.withdraw()
 create()
 root.mainloop()
+
+print(1)
+print(1)
