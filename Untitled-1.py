@@ -30,6 +30,8 @@ for i in range(1, 10):#临时变量i从1遍历到9
 
 """
 
+
+
 """
 #猜数字比大小
 num = random.randint(1, 100)
@@ -194,3 +196,12 @@ create()
 root.mainloop()
 '''
 
+if __name__ == "__main__":
+    print("hello world")
+
+def my_function(a):
+    return a+10
+
+b = 20
+b = my_function(b)
+print(b)
