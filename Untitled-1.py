@@ -198,6 +198,7 @@ root.mainloop()
 
 if __name__ == "__main__":
     print("hello world")
+    pass
 
 def my_function(a):
     return a+10
