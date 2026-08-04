@@ -76,18 +76,37 @@ len(mylist)#一共多少个元素
 """
 print(mylist)
 
+my_dict = {"1班": 1,"二班": 2}
+print(my_dict["1班"])
+"""
+1dict.clear()删除字典内所有元素
+2dict.copy()返回一个字典的浅复制
+3dict.fromkeys(seq[, val])创建一个新字典，以序列 seq 中元素做字典的键,val 为字典所有键对应的初始值
+4dict.get(key, default=None)返回指定键的值,如果值不在字典中返回default值
+5dict.has_key(key)如果键在字典dict里返回true,否则返回false。Python3 不支持。
+6dict.items()以列表返回可遍历的(键, 值) 元组数组
+7dict.keys()以列表返回一个字典所有的键
+8dict.setdefault(key, default=None)和get()类似, 但如果键不存在于字典中,将会添加键并将值设为default
+9dict.update(dict2)把字典dict2的键/值对更新到dict里
+10dict.values()以列表返回字典中的所有值
+11pop(key[,default])删除字典给定键 key 所对应的值,返回值为被删除的值。key值必须给出。 否则,返回default值。
+12popitem()返回并删除字典中的最后一对键和值。
+
+"""
+
 class pony:
     #init函数是在创建实例时候才会执行，所以这时候可以调用set_ponyage这个函数
     def __init__(self, pony_age, pony_list = None):
         self.set_ponyage(pony_age)
         self.ponylist = pony_list
         self.class_list = []
-    def __repr__(self):
+    def __str__(self):
         return "this pony's age is {num1},list is {num2}".format(num1 = self._ponyage, num2 = self.ponylist)
     """
     python中的重要概念@property
     用于定义类中的私有变量，这样就可以在新的实例中完成相应操作，
     而不是像全局变量一样
+    私有变量居然是通过内存里面改名字实现的_类名_变量名字
     """
     def set_ponyage(self, nweage):
         self._ponyage = nweage
@@ -138,9 +157,9 @@ def my_function():
 
 print(my_function())
 
-
+#这是弹窗爱心代码
+'''
 import tkinter as tk
-import time
 index = 0
 random_text = ["爱你哟"]
 root = tk.Tk()
@@ -173,6 +192,5 @@ root = tk.Tk()
 root.withdraw()
 create()
 root.mainloop()
+'''
 
-print(1)
-print(1)
