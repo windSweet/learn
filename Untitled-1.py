@@ -206,3 +206,5 @@ def my_function(a):
 b = 20
 b = my_function(b)
 print(b)
+
+#enumerate 返回下标和对应的值
