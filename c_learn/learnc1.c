@@ -12,8 +12,23 @@ int function_1(int num_1, int num_2)
 
 double function_2(double num_1, double num_2);
 
+void arr_printer(int arr[], int len)
+{
+    //int len = s izeof(arr)/sizeof(arr[0]);
+    //注意 数组只有在定义处才是完整的数组，而在作为参数传入函数当中时，他只是传入一个变量，相当于一个指针(8byte)，即首地址
+    //数组的本质就是好多块变量，通过偏移形成索引，即[0]就是偏移0
+    for (int i = 0; i <= len-1; i++)
+    {
+        printf("%d\n", arr[i]);
+    }
+    return;
+}
+
+
+
 int main()
 {
+    int arr_1[] = {33, 22, 32, 99, 100};
     printf("hello world\n");
     // 取余最后的正负和第一个数字有关系
     // 隐式转换1. short char类型的数据在运算时候会先升为int再进行运算
@@ -73,7 +88,7 @@ int main()
     // /t是补齐八个空格
     long long res = time(NULL);
     printf("%lld\n", res);
-
+    /*
     //猜数字
     srand(time(NULL));
     int real_answer = rand() % 100 + 1;
@@ -88,6 +103,8 @@ int main()
         else if (answer < real_answer){printf("smaller\n");}
         
     }
+    */
+    arr_printer(arr_1, 5);
     
 
 
