@@ -196,6 +196,7 @@ create()
 root.mainloop()
 '''
 
+#可以用来表示只运行在文件本身里面
 if __name__ == "__main__":
     print("hello world")
     pass
