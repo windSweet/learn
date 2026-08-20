@@ -11,6 +11,8 @@ int function_1(int num_1, int num_2)
 }
 
 double function_2(double num_1, double num_2);
+int add(int a1, int b1);
+int multiple(int a1, int b1);
 
 void arr_printer(int arr[], int len)
 {
@@ -28,6 +30,15 @@ void arr_printer(int arr[], int len)
 
 int main()
 {
+    //声明函数指针，注意这个括号里形参的名字需要去掉
+    //这其实是一个函数指针数组
+    int (*p1[2])(int, int) = {multiple, add};
+    //调用函数
+    int a2 = p1[0](4, 6);
+
+
+
+
     int arr_1[] = {33, 22, 32, 99, 100};
     printf("hello world\n");
     // 取余最后的正负和第一个数字有关系
@@ -104,10 +115,10 @@ int main()
         
     }
     */
-    arr_printer(arr_1, 5);
+    //arr_printer(arr_1, 5);
     
 
-
+    printf("%d", a2);
     return 0;
 }
 
@@ -115,4 +126,15 @@ double function_2(double num_1, double num_2)
 {
     double sum = num_1 * num_2;
     return sum;
+}
+
+
+int add(int a1, int b1)
+{
+    return a1 + b1;
+}
+
+int multiple(int a1, int b1)
+{
+    return a1 * b1;
 }

@@ -102,6 +102,7 @@ class pony:
         self.set_ponyage(pony_age)
         self.ponylist = pony_list
         self.class_list = []
+    
     def __str__(self):
         return "this pony's age is {num1},list is {num2}".format(num1 = self._ponyage, num2 = self.ponylist)
     """
@@ -110,6 +111,7 @@ class pony:
     而不是像全局变量一样
     私有变量居然是通过内存里面改名字实现的_类名_变量名字
     """
+    #这是修改局部变量的操作，通过定义set get函数
     def set_ponyage(self, nweage):
         self._ponyage = nweage
     def get_ponyage(self):
@@ -148,6 +150,7 @@ def Ponyfunction(func):
     return wrapper
 #在 Python 中，装饰器（@Ponyfunction）是在“定义函数”的那一刻执行的，
 # 而不是在“调用函数”的时候执行的。
+
 @Ponyfunction
 def my_function():
     return 3

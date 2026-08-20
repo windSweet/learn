@@ -3,7 +3,7 @@
 typedef int mytype1;
 typedef double mytype2;
 
-typedef struct
+typedef struct my_struct
 {
     mytype1 pony_1;
     mytype2 pony_2;
@@ -62,8 +62,49 @@ int *method()
 //void指针随便赋值地址,但是无法获取里面的数据，也不可以加减
 
 void swap_void(void *a, void *b, int len);
+
+//结构体中的变量在内存中的存储不是连续的，对应的内存地址是数据类型所占内存的整数倍，即为内存对齐
+//而结构体所占的总内存是内存最大的数据类型的整数倍
+typedef struct  
+{
+    int length;
+    int weight;
+}my_1struct;
+
+struct test
+{
+    double a; // 0 1 2 3 4 5 6 7
+    int b; //    8 9 10 11
+    char c; //   12
+    char d; //   13 补齐14 15
+
+};
+
+
+union new_type
+{
+    double a;//%lf
+    char b[100];
+};//也受内存对齐的影响。b占100字节，但是不能被a的8整除所以最后占104个字节
+//和结构体的本质区别就是他占用的是一整块空间，而不是分给里面某个元素各一块
+//所以这个共同体只能写入一个变量，比如写了a再写b会就覆盖
+
+
+
 int main()
 {
+    //实例化
+    // my_1struct new_1;
+    // new_1.length = {10 ,20};
+    // printf("%d", new_1.length);
+
+    int arr[] = {1, 2, 3};
+    //数组参与计算的时候会退化为第一个元素指针
+    //不会退化的特殊情况：sizeof，&arr获取地址的时候不会退化
+    int (*p)[3] = &arr;
+    int* p3 = arr;
+    //两者获取的地址一样，但是p3的步长是4，p2的步长是一个数组
+
     int a = 10;
     int b = 11;
     swap_void(&a, &b, 4);
@@ -101,6 +142,8 @@ int main()
 
     return 0;
 }
+
+
 
 //可以看出来void函数就是可以让函数可以处理任何形式的数据类型
 //下面这个就是表示交换任何类型的两个变量的值
