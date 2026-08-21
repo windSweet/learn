@@ -2,6 +2,7 @@
 //alloc contiguous allocation 申请空间+数据初始化
 //realloc re-allocation 修改空间大小
 //free 释放空间
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -11,7 +12,6 @@
 //静态区（分为初始化和未初始化）
 //常量区：就比如指针定义的字符串
 //堆就是malloc，calloc，realloc这些申请的内存
-
 
 int main()
 {
@@ -33,7 +33,7 @@ int main()
     {
         printf("%d  ", p[i]);
     }
-    
+
     //realloc申请新内存的时候如果后面占用就会重现申请一块地址，但是原本的数据不会改变，但是首地址会改变，并且原来的内存会free掉
     int *pp = realloc(p, 20 * sizeof(int));
     if (pp == NULL) printf("no");
@@ -41,6 +41,7 @@ int main()
     {
         printf("no no\n");
     }
+
     free(pp);
     free(p);
 
