@@ -98,17 +98,17 @@ int main()
     // new_1.length = {10 ,20};
     // printf("%d", new_1.length);
 
-    int arr[] = {1, 2, 3};
+    //int arr[] = {1, 2, 3};
     //数组参与计算的时候会退化为第一个元素指针
     //不会退化的特殊情况：sizeof，&arr获取地址的时候不会退化
-    int (*p)[3] = &arr;
-    int* p3 = arr;
+    // int (*p)[3] = &arr;
+    // int* p3 = arr;
     //两者获取的地址一样，但是p3的步长是4，p2的步长是一个数组
 
-    int a = 10;
-    int b = 11;
-    swap_void(&a, &b, 4);
-    printf("%d, %d", a, b);
+    // int a = 10;
+    // int b = 11;
+    // swap_void(&a, &b, 4);
+    // printf("%d, %d", a, b);
 
     //int* p = method();
     //printf("%d\n", *p);
@@ -139,6 +139,59 @@ int main()
     pony_new.pony_1 = 1;
     printf("%d", pony_new.pony_1);
     */
+    int x;
+    int i = 0;
+    int num = 1;
+    scanf("%d", &x);
+    int state = 1;//非零表示不是质数
+    //求质数
+    while (i < x)
+    {
+        state = 1;
+        num++;
+        for (int j = 2; j * j <= num; j++)
+        {
+            if (num % j == 0)
+            {
+                state = 0;
+                break;
+            }
+        }
+        
+        if (state)
+        {
+            i++;
+        }
+    }
+    printf("%d", num);
+    // int x;
+    // int count = 0;  // 已找到的质数个数
+    // int num = 1;    // 从1开始递增检查
+    // scanf("%d", &x);
+
+    // while (count < x) {
+    //     num++;                   // 从2开始检查
+    //     int isPrime = 1;         // 假设当前数是质数（1表示是）
+
+    //     // 检查 num 是不是质数
+    //     for (int j = 2; j * j <= num; j++) {
+    //         if (num % j == 0) {  // 发现能整除的因子
+    //             isPrime = 0;     // 不是质数
+    //             break;           // 不用再往后检查了
+    //         }
+    //     }
+
+    //     if (isPrime) {           // 如果确实是质数
+    //         count++;             // 计数加1
+    //     }
+    // }
+
+    // printf("%d", num);
+    
+
+
+
+
 
     return 0;
 }
