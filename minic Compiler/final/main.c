@@ -42,20 +42,6 @@ typedef enum {
     TOKEN_SEMICOLON
 } TokenType;
 
-typedef enum
-{
-    NODE_PROGRAM,      // 整个程序（根节点）
-    NODE_FUNC_DEF,     // 函数定义
-    NODE_NUM,          // 数字常量
-    NODE_VAR,          // 变量
-    NODE_BINOP,        // 双目运算（+ - * /）
-    NODE_ASSIGN,       // 赋值语句 =
-    NODE_RETURN,       // return 语句
-    NODE_IF,           // if 语句
-    NODE_WHILE,        // while 循环
-    NODE_BLOCK,        // 代码块 { ... }
-    NODE_CALL,         // 函数调用
-} NodeType;
 
 //lexer状态
 typedef struct {
@@ -74,16 +60,101 @@ typedef struct {
     int column;//所在列
 } Token;
 
-typedef struct ASTNode
+typedef struct ASTNode ASTNode;
+
+typedef struct ASTNodeList {
+    ASTNode *node;
+    struct ASTNodeList *next;
+} ASTNodeList;
+
+typedef enum
 {
+    AST_PROGRAM, //根节点
+    AST_FUNCTION,// 函数定义
+    AST_BLOCK,// 代码块 { ... }
+
+    AST_VAR_DECL,
+    AST_ASSIGN,// 赋值语句 =
+    AST_IF,// if 语句
+    AST_WHILE,// while 循环
+    AST_RETURN,// return 语句
+    AST_EXPR_STMT,
+
+    AST_BINARY,// 双目运算（+ - * /）
+    AST_VARIABLE,// 变量
+    AST_NUMBER,// 数字常量
+    AST_CALL// 函数调用
+
+} ASTNodeType;
+
+struct ASTNode {
+    ASTNodeType type;
     Token token;
-    NodeType type;     // "int"、"+"、"identifier"、"integer"
-    int data;             // 整数值或标识符编号
-    int pos_x;
-    int pos_y;
-    struct ASTNode* left_node;
-    struct ASTNode* right_node; // [第几行、第几个 token]，方便给出报错信息
-} ASTNode;
+
+    union {
+        struct {
+            ASTNodeList *functions;
+        } program;
+
+        struct {
+            char name[64];
+            ASTNodeList *parameters;
+            ASTNode *body;
+        } function;
+
+        struct {
+            ASTNodeList *statements;
+        } block;
+
+        struct {
+            char name[64];
+            ASTNode *initializer;
+        } variable_declaration;
+
+        struct {
+            ASTNode *target;
+            ASTNode *value;
+        } assignment;
+
+        struct {
+            ASTNode *condition;
+            ASTNode *then_branch;
+            ASTNode *else_branch;
+        } if_statement;
+
+        struct {
+            ASTNode *condition;
+            ASTNode *body;
+        } while_statement;
+
+        struct {
+            ASTNode *value;
+        } return_statement;
+
+        struct {
+            TokenType operator;
+            ASTNode *left;
+            ASTNode *right;
+        } binary;
+
+        struct {
+            long value;
+        } number;
+
+        struct {
+            char name[64];
+        } variable;
+
+        struct {
+            char name[64];
+            ASTNodeList *arguments;
+        } call;
+
+        struct {
+            ASTNode *expression;
+        } expression_statement;
+    } as;
+};
 
 
 typedef struct {
@@ -94,6 +165,7 @@ typedef struct {
 static Macro macros[MAX_MACROS];
 static int macro_count = 0;
 
+//确认是字母或者_开头
 static int is_identifier_start(char ch)
 {
     return isalpha((unsigned char)ch) || ch == '_';
@@ -153,43 +225,6 @@ static Token make_token(TokenType type, int line, int column)
     return token;
 }
 
-//创建单字符token
-static Token lexer_read_single_char_token(Lexer *lexer, TokenType type)
-{
-    Token token = make_token(
-        type,
-        lexer->line,
-        lexer->column
-    );
-
-    token.text[0] = lexer_current(lexer);
-    token.text[1] = '\0';
-
-    lexer_advance(lexer);
-
-    return token;
-}
-
-//创建双字符token
-static Token lexer_read_double_char_token(Lexer *lexer, TokenType type)
-{
-    Token token = make_token(
-        type,
-        lexer->line,
-        lexer->column
-    );
-
-    token.text[0] = lexer_current(lexer);
-    lexer_advance(lexer);
-
-    token.text[1] = lexer_current(lexer);
-    lexer_advance(lexer);
-
-    token.text[2] = '\0';
-
-    return token;
-}
-
 //lexer的报错
 static void lexer_error(const Lexer *lexer, const char *message)
 {
@@ -243,10 +278,48 @@ static void lexer_advance(Lexer *lexer)
         lexer->column++;
     }
 }
+
+//创建单字符token
+static Token lexer_read_single_char_token(Lexer *lexer, TokenType type)
+{
+    Token token = make_token(
+        type,
+        lexer->line,
+        lexer->column
+    );
+
+    token.text[0] = lexer_current(lexer);
+    token.text[1] = '\0';
+
+    lexer_advance(lexer);
+
+    return token;
+}
+
+//创建双字符token
+static Token lexer_read_double_char_token(Lexer *lexer, TokenType type)
+{
+    Token token = make_token(
+        type,
+        lexer->line,
+        lexer->column
+    );
+
+    token.text[0] = lexer_current(lexer);
+    lexer_advance(lexer);
+
+    token.text[1] = lexer_current(lexer);
+    lexer_advance(lexer);
+
+    token.text[2] = '\0';
+
+    return token;
+}
+
 //创建数字token
 static Token lexer_read_number(Lexer *lexer)
 {
-    Token token;
+    Token token = make_token(TOKEN_NUMBER, lexer->line, lexer->column);
     token.type = TOKEN_NUMBER;
     token.value = 0;
     token.line = lexer->line;
@@ -265,7 +338,7 @@ static Token lexer_read_number(Lexer *lexer)
 //创建标识符token
 static Token lexer_read_identifier(Lexer *lexer)
 {
-    Token token;
+    Token token = make_token(TOKEN_NUMBER, lexer->line, lexer->column);
     size_t length = 0;
 
     token.line = lexer->line;
@@ -307,9 +380,9 @@ static Token lexer_next_token(Lexer* lexer)
 {
     lexer_skip_whitespace(lexer);
     char current = lexer_current(lexer);
-    if (current = '\0')
+    if (current == '\0')
     {
-        Token Token = make_token(TOKEN_EOF, lexer->line, lexer->column);
+        return make_token(TOKEN_EOF, lexer->line, lexer->column);
     }
 
     //识别关键字或标识符，第一个字符只能是字母或下划线
@@ -391,19 +464,240 @@ static Token lexer_next_token(Lexer* lexer)
 
 }
 
-//创建新的ast节点
-ASTNode *ast_new(NodeType type, Token token)
+
+//parser部分
+
+//创建node函数
+static ASTNode* ast_new(ASTNodeType type, Token token)
 {
-    ASTNode *node = calloc(1, sizeof(ASTNode));
-    if (!node) {
-        fprintf(stderr, "out of memory\n");
+    ASTNode* node = calloc(1, sizeof(ASTNode));
+    if (node == NULL)
+    {
+        printf("have no enough memory");
         exit(EXIT_FAILURE);
     }
-
     node->type = type;
     node->token = token;
     return node;
 }
+
+//创建num node
+static ASTNode *ast_new_number(Token token)
+{
+    ASTNode *node = ast_new(AST_NUMBER, token);
+    node->as.number.value = token.value;
+    return node;
+}
+
+//创建变量节点
+static ASTNode *ast_new_variable(Token name_token)
+{
+    ASTNode *node = ast_new(AST_VARIABLE, name_token);
+    strcpy(node->as.variable.name, name_token.text);
+    return node;
+}
+
+//创建二元表达式node
+static ASTNode *ast_new_binary(Token operator_token, ASTNode *left, ASTNode *right)
+{
+    ASTNode *node = ast_new(AST_BINARY, operator_token);
+    node->as.binary.operator = operator_token.type;
+    node->as.binary.left = left;
+    node->as.binary.right = right;
+    return node;
+}
+
+//创建变量声明节点 没有初始化表达式时：initializer == NULL
+static ASTNode *ast_new_var_decl(Token int_token, Token name_token, ASTNode *initializer)
+{
+    ASTNode *node = ast_new(AST_VAR_DECL, int_token);
+
+    //防止栈溢出
+    snprintf(node->as.variable_declaration.name,
+        sizeof(node->as.variable_declaration.name),"%s",
+        name_token.text);
+    node->as.variable_declaration.initializer = initializer;
+    return node;
+}
+
+//创建赋值节点
+static ASTNode *ast_new_assignment(Token assign_token, ASTNode *target, ASTNode *value)
+{
+    ASTNode *node = ast_new(AST_ASSIGN, assign_token);
+    //as.assignment.target原本是name,但是为了防止变量交换所以改成了这样
+    node->as.assignment.target = target;
+    node->as.assignment.value = value;
+    return node;
+}
+
+//创建if节点
+/*
+AST_IF
+├── condition
+│   └── AST_BINARY <
+│       ├── AST_VARIABLE a
+│       └── AST_NUMBER 1
+├── then
+│   └── AST_BLOCK
+│       └── AST_RETURN
+└── else
+    └── NULL
+*/
+static ASTNode *ast_new_if(Token if_token, ASTNode *condition,
+    ASTNode *then_branch, ASTNode *else_branch)
+{
+    ASTNode *node = ast_new(AST_IF, if_token);
+    node->as.if_statement.condition = condition;
+    node->as.if_statement.then_branch = then_branch;
+    node->as.if_statement.else_branch = else_branch;
+    return node;
+}
+
+//创建while节点
+static ASTNode *ast_new_while(Token while_token, ASTNode *condition, ASTNode *body)
+{
+    ASTNode *node = ast_new(AST_WHILE, while_token);
+    node->as.while_statement.condition = condition;
+    node->as.while_statement.body = body;
+    return node;
+}
+
+//创建代码块节点
+static ASTNode *ast_new_block(Token open_brace)
+{
+    ASTNode *node = ast_new(AST_BLOCK, open_brace);
+    node->as.block.statements = NULL;
+    return node;
+}
+//向代码块添加语句
+static void ast_block_add_statement(ASTNode *block, ASTNode *statement)
+{
+    if (block == NULL || block->type != AST_BLOCK)
+    {
+        fprintf(stderr, "error, not block\n");
+        exit(EXIT_FAILURE);
+    }
+    ast_list_append(&block->as.block.statements, statement);
+}
+
+
+
+//创建return节点
+static ASTNode *ast_new_return(Token return_token, ASTNode *value)
+{
+    ASTNode *node = ast_new(AST_RETURN, return_token);
+    node->as.return_statement.value = value;
+    return node;
+}
+
+//paser状态
+typedef struct
+{
+    Lexer lexer;
+    Token current;
+} Parser;
+
+//初始化parser
+static void parser_init(Parser* parser, const char* source)
+{
+    lexer_init(&parser->lexer, source);
+    parser->current = lexer_next_token(&parser->lexer);
+}
+
+//前进一个token
+static void parser_advance(Parser *parser)
+{
+    parser->current = lexer_next_token(&parser->lexer);
+}
+
+//查看type是否相同，相同返回1，不同返回0
+static int parser_check(const Parser *parser, TokenType type)
+{
+    return parser->current.type == type;
+}
+
+//如果匹配就使用
+static int paser_match(Parser* parser,TokenType type)
+{
+    if(!parser_check(parser, type))
+    {
+        return 0;
+    }
+    parser_advance(parser);
+    return 1;
+}
+
+//要求必须出现某个token
+static Token parser_expect(Parser* parser, TokenType type, const char* message)
+{
+    if (!parser_check(parser, type))
+    {
+        fprintf(stderr,
+        "error line: %d, column: %d. %s: now token is %s\n",
+            parser->current.line, parser->current.column, message,
+            token_type_name(parser->current.type));
+        exit(EXIT_FAILURE);
+    }
+
+    Token token = parser->current;
+    parser_advance(parser);
+    return token;
+}
+
+//链表初始化
+static ASTNodeList *ast_list_new(ASTNode *node)
+{
+    ASTNodeList *item = malloc(sizeof(ASTNodeList));
+
+    if (item == NULL)
+    {
+        fprintf(stderr, "dont have enough memory\n");
+        exit(EXIT_FAILURE);
+    }
+    item->node = node;
+    item->next = NULL;
+    return item;
+}
+
+static void ast_list_append(ASTNodeList **head, ASTNode *node)
+{
+    ASTNodeList *item = ast_list_new(node);
+    if (*head == NULL)
+    {
+        *head = item;
+        return;
+    }
+    ASTNodeList* current = *head;
+    //将node添加到head的最后
+    while (current->next != NULL)
+    {
+        current = current->next;
+    }
+    current->next = item;
+}
+//ast_list_append(&block->as.block.statements, statement);
+
+
+
+
+
+
+
+
+
+
+static ASTNode* parser_primary(Parser* parser)
+{
+    if (parser_check(parser, TOKEN_NUMBER))
+    {
+        Token number_token = parser->current;
+        parser_advance(parser);
+        return 1;
+    }
+}
+
+static ASTNode* parser_expression(Parser* parser);
+
 
 char *read_file(const char *filename)
 {
@@ -448,6 +742,36 @@ char *read_file(const char *filename)
 static const char *token_type_name(TokenType type);
 int main()
 {
+    const char* source = 
+        "int main() {\n"
+        "    int n;\n"
+        "    n = 17;\n"
+        "\n"
+        "    if (n >= 2) {\n"
+        "        return n % 2;\n"
+        "    } else {\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n";
+
+    Lexer lexer;
+    lexer_init(&lexer, source);
+    for (;;)
+    {
+        Token token = lexer_next_token(&lexer);
+        printf(
+            "%-22s text=\"%s\" value=%d "
+            "line and column=%d:%d\n",
+            token_type_name(token.type),
+            token.text,
+            token.value,
+            token.line,
+            token.column
+        );
+        if (token.type == TOKEN_EOF) break;
+
+    }
+    return 0;
 
 }
 static const char *token_type_name(TokenType type)
