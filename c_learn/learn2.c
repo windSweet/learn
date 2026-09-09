@@ -139,31 +139,30 @@ int main()
     pony_new.pony_1 = 1;
     printf("%d", pony_new.pony_1);
     */
-    int x;
+    int x = 10;
     int i = 0;
     int num = 1;
-    scanf("%d", &x);
-    int state = 1;//非零表示不是质数
-    //求质数
-    while (i < x)
+    int state = 1;
+while (i < x)
+{
+    state = 1;
+    num = num + 1;
+    int j = 2;
+    while (j * j <= num)
     {
-        state = 1;
-        num++;
-        for (int j = 2; j * j <= num; j++)
+        if (num % j == 0)
         {
-            if (num % j == 0)
-            {
-                state = 0;
-                break;
-            }
+            state = 0;
+            break;
         }
-        
-        if (state)
-        {
-            i++;
-        }
+        j = j + 1;
     }
-    printf("%d", num);
+    if (state)
+    {
+        i = i + 1;
+    }
+}
+printf("%d", num);
     // int x;
     // int count = 0;  // 已找到的质数个数
     // int num = 1;    // 从1开始递增检查
