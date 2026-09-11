@@ -7,7 +7,8 @@
 #define MAX_NAME_LEN 63
 #define MAX_VALUE_LEN 1023
 #define MAX_LINE_LEN 4096
-
+#define TRUE 1
+#define FALSE 0
 //枚举
 typedef enum {
     TOKEN_EOF,
@@ -1574,6 +1575,20 @@ char *read_file(const char *filename)
     return source;
 }
 
+static int *write_file(char* new_value, char* file_name)
+{
+    FILE *file = fopen(file_name, "a");
+    if (file == NULL)
+    {
+        fprintf(stderr, "open file error: %s\n", file_name);
+        exit(EXIT_FAILURE);
+    }
+    char* new_value = strcat(new_value, "\n");
+    fwrite(new_value,sizeof(char), strlen(new_value), file);
+    fclose(file);
+    return 1;
+}
+
 // int main(int argc, char **argv)
 // {
 //     if (argc < 2)
@@ -1621,49 +1636,12 @@ char *read_file(const char *filename)
 
 int main(void)
 {
-    const char *source =
-        "int main() {\n"
-        "    int x;\n"
-        "    int i;\n"
-        "    int num;\n"
-        "    int state;\n"
-        "    int j;\n"
-        "\n"
-        "    x = input();\n"
-        "    i = 0;\n"
-        "    num = 1;\n"
-        "    state = 1;\n"
-        "    j = 2;\n"
-        "\n"
-        "    while (i < x) {\n"
-        "        state = 1;\n"
-        "        num = num + 1;\n"
-        "        j = 2;\n"
-        "\n"
-        "        while (j * j <= num) {\n"
-        "            if (num % j == 0) {\n"
-        "                state = 0;\n"
-        "            }\n"
-        "\n"
-        "            j = j + 1;\n"
-        "        }\n"
-        "\n"
-        "        if (state == 1) {\n"
-        "            i = i + 1;\n"
-        "        }\n"
-        "    }\n"
-        "\n"
-        "    print(num);\n"
-        "    return 0;\n"
-        "}\n";
 
+    const char *source = read_file("D:\\learn\\minic Compiler\\final\\test.minic");
     Parser parser;
     parser_init(&parser, source);
-
-    ASTNode *program =
-        parse_program(&parser);
+    ASTNode *program = parse_program(&parser);
 
     ast_print(program, 0);
-
     return 0;
 }
