@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 int main()
 {
     int x;
@@ -31,7 +33,6 @@ int main()
             i = i + 1;
         }
     }
-    print(num);
-    print(1);
+    printf("%d", num);
     return 0;
 }

@@ -1635,15 +1635,1130 @@ static int write_file(char* new_value, char* file_name)
 // }
 
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/* ================= AST -> IR -> x86-64 Assembly ================= */
+
+typedef enum {
+    IR_LABEL,
+    IR_ASSIGN,
+    IR_BINARY,
+    IR_GOTO,
+    IR_IF_FALSE,
+    IR_RETURN,
+    IR_PRINT
+} IRKind;
+
+typedef struct IRInstruction {
+    IRKind kind;
+
+    char result[64];
+    char arg1[64];
+    char arg2[64];
+
+    TokenType operator;
+
+    struct IRInstruction *next;
+} IRInstruction;
+
+typedef struct {
+    IRInstruction *head;
+    IRInstruction *tail;
+
+    int temp_count;
+    int label_count;
+} IRProgram;
+
+static void ir_init(IRProgram *ir)
+{
+    memset(ir, 0, sizeof(IRProgram));
+}
+
+static void ir_emit(
+    IRProgram *ir,
+    IRKind kind,
+    const char *result,
+    const char *arg1,
+    const char *arg2,
+    TokenType operator
+)
+{
+    IRInstruction *instruction =
+        calloc(1, sizeof(IRInstruction));
+
+    if (instruction == NULL) {
+        fprintf(stderr, "IR 内存分配失败\n");
+        exit(EXIT_FAILURE);
+    }
+
+    instruction->kind = kind;
+    instruction->operator = operator;
+
+    snprintf(
+        instruction->result,
+        sizeof(instruction->result),
+        "%s",
+        result == NULL ? "" : result
+    );
+
+    snprintf(
+        instruction->arg1,
+        sizeof(instruction->arg1),
+        "%s",
+        arg1 == NULL ? "" : arg1
+    );
+
+    snprintf(
+        instruction->arg2,
+        sizeof(instruction->arg2),
+        "%s",
+        arg2 == NULL ? "" : arg2
+    );
+
+    if (ir->head == NULL) {
+        ir->head = instruction;
+    } else {
+        ir->tail->next = instruction;
+    }
+
+    ir->tail = instruction;
+}
+
+static void ir_new_temp(
+    IRProgram *ir,
+    char *buffer,
+    size_t buffer_size
+)
+{
+    snprintf(
+        buffer,
+        buffer_size,
+        "t%d",
+        ir->temp_count++
+    );
+}
+
+static void ir_new_label(
+    IRProgram *ir,
+    char *buffer,
+    size_t buffer_size
+)
+{
+    snprintf(
+        buffer,
+        buffer_size,
+        "L%d",
+        ir->label_count++
+    );
+}
+
+static const char *ir_operator_name(TokenType type)
+{
+    switch (type) {
+        case TOKEN_PLUS:
+            return "+";
+
+        case TOKEN_MINUS:
+            return "-";
+
+        case TOKEN_STAR:
+            return "*";
+
+        case TOKEN_SLASH:
+            return "/";
+
+        case TOKEN_PERCENT:
+            return "%";
+
+        case TOKEN_EQUAL:
+            return "==";
+
+        case TOKEN_NOT_EQUAL:
+            return "!=";
+
+        case TOKEN_LESS:
+            return "<";
+
+        case TOKEN_LESS_EQUAL:
+            return "<=";
+
+        case TOKEN_GREATER:
+            return ">";
+
+        case TOKEN_GREATER_EQUAL:
+            return ">=";
+
+        default:
+            return "?";
+    }
+}
+
+static void ir_print(const IRProgram *ir)
+{
+    const IRInstruction *current = ir->head;
+
+    while (current != NULL) {
+        switch (current->kind) {
+            case IR_LABEL:
+                printf("%s:\n", current->result);
+                break;
+
+            case IR_ASSIGN:
+                printf(
+                    "%s = %s\n",
+                    current->result,
+                    current->arg1
+                );
+                break;
+
+            case IR_BINARY:
+                printf(
+                    "%s = %s %s %s\n",
+                    current->result,
+                    current->arg1,
+                    ir_operator_name(current->operator),
+                    current->arg2
+                );
+                break;
+
+            case IR_GOTO:
+                printf("goto %s\n", current->result);
+                break;
+
+            case IR_IF_FALSE:
+                printf(
+                    "if_false %s goto %s\n",
+                    current->arg1,
+                    current->result
+                );
+                break;
+
+            case IR_RETURN:
+                printf("return %s\n", current->arg1);
+                break;
+
+            case IR_PRINT:
+                printf("print %s\n", current->arg1);
+                break;
+        }
+
+        current = current->next;
+    }
+}
+
+/* ---------- AST 转 IR ---------- */
+
+static void ir_generate_expression(
+    IRProgram *ir,
+    ASTNode *node,
+    char *result,
+    size_t result_size
+);
+
+static void ir_generate_statement(
+    IRProgram *ir,
+    ASTNode *node
+);
+
+static void ir_generate_expression(
+    IRProgram *ir,
+    ASTNode *node,
+    char *result,
+    size_t result_size
+)
+{
+    if (node == NULL) {
+        fprintf(stderr, "IR 错误：表达式为空\n");
+        exit(EXIT_FAILURE);
+    }
+
+    switch (node->type) {
+        case AST_NUMBER:
+            snprintf(
+                result,
+                result_size,
+                "%ld",
+                node->as.number.value
+            );
+            break;
+
+        case AST_VARIABLE:
+            snprintf(
+                result,
+                result_size,
+                "%s",
+                node->as.variable.name
+            );
+            break;
+
+        case AST_BINARY: {
+            char left[64];
+            char right[64];
+
+            ir_generate_expression(
+                ir,
+                node->as.binary.left,
+                left,
+                sizeof(left)
+            );
+
+            ir_generate_expression(
+                ir,
+                node->as.binary.right,
+                right,
+                sizeof(right)
+            );
+
+            ir_new_temp(
+                ir,
+                result,
+                result_size
+            );
+
+            ir_emit(
+                ir,
+                IR_BINARY,
+                result,
+                left,
+                right,
+                node->as.binary.operator
+            );
+
+            break;
+        }
+
+        default:
+            fprintf(stderr, "IR 错误：不支持的表达式节点\n");
+            exit(EXIT_FAILURE);
+    }
+}
+
+static void ir_generate_block(
+    IRProgram *ir,
+    ASTNode *block
+)
+{
+    ASTNodeList *current =
+        block->as.block.statements;
+
+    while (current != NULL) {
+        ir_generate_statement(ir, current->node);
+        current = current->next;
+    }
+}
+
+static void ir_generate_statement(
+    IRProgram *ir,
+    ASTNode *node
+)
+{
+    if (node == NULL) {
+        return;
+    }
+
+    switch (node->type) {
+        case AST_BLOCK:
+            ir_generate_block(ir, node);
+            break;
+
+        case AST_VAR_DECL: {
+            if (
+                node->as.variable_declaration.initializer
+                != NULL
+            ) {
+                char value[64];
+
+                ir_generate_expression(
+                    ir,
+                    node->as.variable_declaration.initializer,
+                    value,
+                    sizeof(value)
+                );
+
+                ir_emit(
+                    ir,
+                    IR_ASSIGN,
+                    node->as.variable_declaration.name,
+                    value,
+                    NULL,
+                    TOKEN_EOF
+                );
+            }
+
+            break;
+        }
+
+        case AST_ASSIGN: {
+            char value[64];
+
+            ir_generate_expression(
+                ir,
+                node->as.assignment.value,
+                value,
+                sizeof(value)
+            );
+
+            ir_emit(
+                ir,
+                IR_ASSIGN,
+                node->as.assignment.target
+                    ->as.variable.name,
+                value,
+                NULL,
+                TOKEN_EOF
+            );
+
+            break;
+        }
+
+        case AST_RETURN: {
+            char value[64];
+
+            ir_generate_expression(
+                ir,
+                node->as.return_statement.value,
+                value,
+                sizeof(value)
+            );
+
+            ir_emit(
+                ir,
+                IR_RETURN,
+                NULL,
+                value,
+                NULL,
+                TOKEN_EOF
+            );
+
+            break;
+        }
+
+        case AST_EXPR_STMT: {
+            ASTNode *expression =
+                node->as.expression_statement.expression;
+
+            if (
+                expression->type == AST_CALL &&
+                strcmp(
+                    expression->as.call.name,
+                    "print"
+                ) == 0
+            ) {
+                ASTNodeList *arguments =
+                    expression->as.call.arguments;
+
+                if (
+                    arguments == NULL ||
+                    arguments->next != NULL
+                ) {
+                    fprintf(
+                        stderr,
+                        "print() 需要一个参数\n"
+                    );
+                    exit(EXIT_FAILURE);
+                }
+
+                char value[64];
+
+                ir_generate_expression(
+                    ir,
+                    arguments->node,
+                    value,
+                    sizeof(value)
+                );
+
+                ir_emit(
+                    ir,
+                    IR_PRINT,
+                    NULL,
+                    value,
+                    NULL,
+                    TOKEN_EOF
+                );
+            }
+
+            break;
+        }
+
+        case AST_IF: {
+            char condition[64];
+            char else_label[64];
+            char end_label[64];
+
+            ir_generate_expression(
+                ir,
+                node->as.if_statement.condition,
+                condition,
+                sizeof(condition)
+            );
+
+            ir_new_label(
+                ir,
+                else_label,
+                sizeof(else_label)
+            );
+
+            ir_new_label(
+                ir,
+                end_label,
+                sizeof(end_label)
+            );
+
+            ir_emit(
+                ir,
+                IR_IF_FALSE,
+                else_label,
+                condition,
+                NULL,
+                TOKEN_EOF
+            );
+
+            ir_generate_statement(
+                ir,
+                node->as.if_statement.then_branch
+            );
+
+            if (
+                node->as.if_statement.else_branch
+                != NULL
+            ) {
+                ir_emit(
+                    ir,
+                    IR_GOTO,
+                    end_label,
+                    NULL,
+                    NULL,
+                    TOKEN_EOF
+                );
+
+                ir_emit(
+                    ir,
+                    IR_LABEL,
+                    else_label,
+                    NULL,
+                    NULL,
+                    TOKEN_EOF
+                );
+
+                ir_generate_statement(
+                    ir,
+                    node->as.if_statement.else_branch
+                );
+
+                ir_emit(
+                    ir,
+                    IR_LABEL,
+                    end_label,
+                    NULL,
+                    NULL,
+                    TOKEN_EOF
+                );
+            } else {
+                ir_emit(
+                    ir,
+                    IR_LABEL,
+                    else_label,
+                    NULL,
+                    NULL,
+                    TOKEN_EOF
+                );
+            }
+
+            break;
+        }
+
+        case AST_WHILE: {
+            char condition_label[64];
+            char end_label[64];
+            char condition[64];
+
+            ir_new_label(
+                ir,
+                condition_label,
+                sizeof(condition_label)
+            );
+
+            ir_new_label(
+                ir,
+                end_label,
+                sizeof(end_label)
+            );
+
+            ir_emit(
+                ir,
+                IR_LABEL,
+                condition_label,
+                NULL,
+                NULL,
+                TOKEN_EOF
+            );
+
+            ir_generate_expression(
+                ir,
+                node->as.while_statement.condition,
+                condition,
+                sizeof(condition)
+            );
+
+            ir_emit(
+                ir,
+                IR_IF_FALSE,
+                end_label,
+                condition,
+                NULL,
+                TOKEN_EOF
+            );
+
+            ir_generate_statement(
+                ir,
+                node->as.while_statement.body
+            );
+
+            ir_emit(
+                ir,
+                IR_GOTO,
+                condition_label,
+                NULL,
+                NULL,
+                TOKEN_EOF
+            );
+
+            ir_emit(
+                ir,
+                IR_LABEL,
+                end_label,
+                NULL,
+                NULL,
+                TOKEN_EOF
+            );
+
+            break;
+        }
+
+        default:
+            fprintf(
+                stderr,
+                "IR 错误：不支持的语句节点\n"
+            );
+            exit(EXIT_FAILURE);
+    }
+}
+
+static void ir_generate_program(
+    IRProgram *ir,
+    ASTNode *program
+)
+{
+    ASTNodeList *functions =
+        program->as.program.functions;
+
+    while (functions != NULL) {
+        ASTNode *function = functions->node;
+
+        ir_generate_statement(
+            ir,
+            function->as.function.body
+        );
+
+        functions = functions->next;
+    }
+}
+
+/* ---------- 汇编栈变量 ---------- */
+
+typedef struct {
+    char name[64];
+    int offset;
+} AssemblySlot;
+
+static AssemblySlot assembly_slots[512];
+static int assembly_slot_count = 0;
+static int assembly_temp_count = 0;
+
+static void assembly_add_slot(
+    const char *name
+)
+{
+    int i;
+
+    for (i = 0; i < assembly_slot_count; i++) {
+        if (
+            strcmp(
+                assembly_slots[i].name,
+                name
+            ) == 0
+        ) {
+            return;
+        }
+    }
+
+    if (
+        assembly_slot_count >=
+        (int)(sizeof(assembly_slots) /
+              sizeof(assembly_slots[0]))
+    ) {
+        fprintf(stderr, "汇编栈变量数量超过上限\n");
+        exit(EXIT_FAILURE);
+    }
+
+    snprintf(
+        assembly_slots[assembly_slot_count].name,
+        sizeof(assembly_slots[assembly_slot_count].name),
+        "%s",
+        name
+    );
+
+    assembly_slots[assembly_slot_count].offset =
+        -4 - assembly_slot_count * 4;
+
+    assembly_slot_count++;
+}
+
+static int assembly_find_slot(
+    const char *name
+)
+{
+    int i;
+
+    for (i = 0; i < assembly_slot_count; i++) {
+        if (
+            strcmp(
+                assembly_slots[i].name,
+                name
+            ) == 0
+        ) {
+            return assembly_slots[i].offset;
+        }
+    }
+
+    fprintf(
+        stderr,
+        "汇编错误：找不到变量或临时变量 %s\n",
+        name
+    );
+
+    exit(EXIT_FAILURE);
+}
+
+static int is_integer_text(
+    const char *text
+)
+{
+    size_t i = 0;
+
+    if (text[0] == '-') {
+        i++;
+    }
+
+    if (text[i] == '\0') {
+        return FALSE;
+    }
+
+    while (text[i] != '\0') {
+        if (!isdigit((unsigned char)text[i])) {
+            return FALSE;
+        }
+
+        i++;
+    }
+
+    return TRUE;
+}
+
+static int temporary_number(
+    const char *name
+)
+{
+    return atoi(name + 1);
+}
+
+static int temporary_offset(const char *name)
+{
+    return -4 -
+           assembly_slot_count * 4 -
+           temporary_number(name) * 4;
+}
+static void assembly_collect_variables(
+    const IRProgram *ir
+)
+{
+    const IRInstruction *current =
+        ir->head;
+
+    while (current != NULL) {
+        const char *values[3];
+        int i;
+
+        values[0] = current->result;
+        values[1] = current->arg1;
+        values[2] = current->arg2;
+
+        for (i = 0; i < 3; i++) {
+            const char *value = values[i];
+
+            if (value[0] == '\0') {
+                continue;
+            }
+
+            if (
+                value[0] == 't' &&
+                isdigit((unsigned char)value[1])
+            ) {
+                continue;
+            }
+
+            if (
+                value[0] == 'L' &&
+                isdigit((unsigned char)value[1])
+            ) {
+                continue;
+            }
+
+            if (is_integer_text(value)) {
+                continue;
+            }
+
+            assembly_add_slot(value);
+        }
+
+        current = current->next;
+    }
+}
+
+static int assembly_operand_offset(
+    const char *operand
+)
+{
+    if (
+        operand[0] == 't' &&
+        isdigit((unsigned char)operand[1])
+    ) {
+        return temporary_offset(operand);
+    }
+
+    return assembly_find_slot(operand);
+}
+
+static void assembly_load(
+    FILE *output,
+    const char *operand
+)
+{
+    if (is_integer_text(operand)) {
+        fprintf(
+            output,
+            "    movl $%s, %%eax\n",
+            operand
+        );
+    } else {
+        fprintf(
+            output,
+            "    movl %d(%%rbp), %%eax\n",
+            assembly_operand_offset(operand)
+        );
+    }
+}
+
+static void assembly_store(
+    FILE *output,
+    const char *name
+)
+{
+    fprintf(
+        output,
+        "    movl %%eax, %d(%%rbp)\n",
+        assembly_operand_offset(name)
+    );
+}
+
+static void assembly_binary(
+    FILE *output,
+    const IRInstruction *instruction
+)
+{
+    assembly_load(
+        output,
+        instruction->arg1
+    );
+
+    fprintf(output, "    pushq %%rax\n");
+
+    assembly_load(
+        output,
+        instruction->arg2
+    );
+
+    fprintf(output, "    movl %%eax, %%ecx\n");
+    fprintf(output, "    popq %%rax\n");
+
+    switch (instruction->operator) {
+        case TOKEN_PLUS:
+            fprintf(output, "    addl %%ecx, %%eax\n");
+            break;
+
+        case TOKEN_MINUS:
+            fprintf(output, "    subl %%ecx, %%eax\n");
+            break;
+
+        case TOKEN_STAR:
+            fprintf(output, "    imull %%ecx, %%eax\n");
+            break;
+
+        case TOKEN_SLASH:
+            fprintf(output, "    cdq\n");
+            fprintf(output, "    idivl %%ecx\n");
+            break;
+
+        case TOKEN_PERCENT:
+            fprintf(output, "    cdq\n");
+            fprintf(output, "    idivl %%ecx\n");
+            fprintf(output, "    movl %%edx, %%eax\n");
+            break;
+
+        case TOKEN_EQUAL:
+            fprintf(output, "    cmpl %%ecx, %%eax\n");
+            fprintf(output, "    sete %%al\n");
+            fprintf(output, "    movzbl %%al, %%eax\n");
+            break;
+
+        case TOKEN_NOT_EQUAL:
+            fprintf(output, "    cmpl %%ecx, %%eax\n");
+            fprintf(output, "    setne %%al\n");
+            fprintf(output, "    movzbl %%al, %%eax\n");
+            break;
+
+        case TOKEN_LESS:
+            fprintf(output, "    cmpl %%ecx, %%eax\n");
+            fprintf(output, "    setl %%al\n");
+            fprintf(output, "    movzbl %%al, %%eax\n");
+            break;
+
+        case TOKEN_LESS_EQUAL:
+            fprintf(output, "    cmpl %%ecx, %%eax\n");
+            fprintf(output, "    setle %%al\n");
+            fprintf(output, "    movzbl %%al, %%eax\n");
+            break;
+
+        case TOKEN_GREATER:
+            fprintf(output, "    cmpl %%ecx, %%eax\n");
+            fprintf(output, "    setg %%al\n");
+            fprintf(output, "    movzbl %%al, %%eax\n");
+            break;
+
+        case TOKEN_GREATER_EQUAL:
+            fprintf(output, "    cmpl %%ecx, %%eax\n");
+            fprintf(output, "    setge %%al\n");
+            fprintf(output, "    movzbl %%al, %%eax\n");
+            break;
+
+        default:
+            fprintf(stderr, "汇编错误：未知二元运算符\n");
+            exit(EXIT_FAILURE);
+    }
+
+    assembly_store(
+        output,
+        instruction->result
+    );
+}
+
+static void ir_generate_assembly(
+    FILE *output,
+    const IRProgram *ir
+)
+{
+    const IRInstruction *current;
+    int local_bytes;
+    int stack_size;
+
+    assembly_slot_count = 0;
+    assembly_temp_count = ir->temp_count;
+
+    assembly_collect_variables(ir);
+
+    local_bytes =
+        assembly_slot_count * 4 +
+        assembly_temp_count * 4;
+
+    stack_size =
+        ((local_bytes + 15) / 16) * 16;
+
+    if (stack_size < 32) {
+        stack_size = 32;
+    }
+
+    fprintf(output, ".section .rdata\n");
+    fprintf(output, ".LC0:\n");
+    fprintf(output, "    .asciz \"%%d\\n\"\n");
+
+    fprintf(output, ".text\n");
+    fprintf(output, ".globl main\n");
+    fprintf(output, "main:\n");
+
+    fprintf(output, "    pushq %%rbp\n");
+    fprintf(output, "    movq %%rsp, %%rbp\n");
+    fprintf(
+        output,
+        "    subq $%d, %%rsp\n",
+        stack_size
+    );
+
+    current = ir->head;
+
+    while (current != NULL) {
+        switch (current->kind) {
+            case IR_LABEL:
+                fprintf(
+                    output,
+                    ".L%s:\n",
+                    current->result
+                );
+                break;
+
+            case IR_ASSIGN:
+                assembly_load(
+                    output,
+                    current->arg1
+                );
+
+                assembly_store(
+                    output,
+                    current->result
+                );
+                break;
+
+            case IR_BINARY:
+                assembly_binary(
+                    output,
+                    current
+                );
+                break;
+
+            case IR_GOTO:
+                fprintf(
+                    output,
+                    "    jmp .L%s\n",
+                    current->result
+                );
+                break;
+
+            case IR_IF_FALSE:
+                assembly_load(
+                    output,
+                    current->arg1
+                );
+
+                fprintf(output, "    cmpl $0, %%eax\n");
+                fprintf(
+                    output,
+                    "    je .L%s\n",
+                    current->result
+                );
+                break;
+
+            case IR_RETURN:
+                assembly_load(
+                    output,
+                    current->arg1
+                );
+
+                fprintf(output, "    leave\n");
+                fprintf(output, "    ret\n");
+                break;
+
+            case IR_PRINT:
+                assembly_load(
+                    output,
+                    current->arg1
+                );
+
+                /*
+                 * Windows x64 调用约定：
+                 * RCX：第一个参数
+                 * RDX：第二个参数
+                 */
+                fprintf(
+                    output,
+                    "    movl %%eax, %%edx\n"
+                );
+
+                fprintf(
+                    output,
+                    "    leaq .LC0(%%rip), %%rcx\n"
+                );
+
+                fprintf(
+                    output,
+                    "    subq $40, %%rsp\n"
+                );
+
+                fprintf(
+                    output,
+                    "    call printf\n"
+                );
+
+                fprintf(
+                    output,
+                    "    addq $40, %%rsp\n"
+                );
+
+                break;
+        }
+
+        current = current->next;
+    }
+
+    fprintf(output, "    xorl %%eax, %%eax\n");
+    fprintf(output, "    leave\n");
+    fprintf(output, "    ret\n");
+}
 
 int main(void)
 {
-
-    const char *source = read_file("D:\\learn\\minic Compiler\\final\\test.minic");
+    const char *source;
     Parser parser;
-    parser_init(&parser, source);
-    ASTNode *program = parse_program(&parser);
+    ASTNode *program;
+    IRProgram ir;
+    FILE *output;
 
-    ast_print(program, 0);
-    return 0;
+    source = read_file(
+        "D:\\learn\\minic Compiler\\final\\test.minic"
+    );
+
+    parser_init(&parser, source);
+
+    program = parse_program(&parser);
+
+    ir_init(&ir);
+
+    ir_generate_program(
+        &ir,
+        program
+    );
+
+    printf("========== IR ==========\n");
+    ir_print(&ir);
+
+    output = fopen("output.s", "w");
+
+    if (output == NULL) {
+        fprintf(
+            stderr,
+            "无法创建 output.s\n"
+        );
+
+        free((void *)source);
+        return EXIT_FAILURE;
+    }
+
+    ir_generate_assembly(
+        output,
+        &ir
+    );
+
+    fclose(output);
+    free((void *)source);
+
+    printf("over：output.s\n");
+
+    return EXIT_SUCCESS;
 }
