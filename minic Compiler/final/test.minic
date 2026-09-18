@@ -20,7 +20,7 @@ int main()
 
         while(j*j <= num)
         {
-            if (num % j == 0)
+            if (num %j == 0)
             {
                 state = 0;
             }

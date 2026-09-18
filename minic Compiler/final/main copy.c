@@ -9,6 +9,9 @@
 #define MAX_LINE_LEN 4096
 #define TRUE 1
 #define FALSE 0
+#define MAX_VARIABLES 100
+#define MAX_SCOPE_DEPTH 100
+
 //枚举
 typedef enum {
     TOKEN_EOF,
@@ -61,6 +64,7 @@ typedef struct {
     int line;//所在行
     int column;//所在列
 } Token;
+
 
 typedef struct ASTNode ASTNode;
 
@@ -115,6 +119,8 @@ struct ASTNode {
         struct {
             char name[64];
             ASTNode *initializer;
+            char resolved_name[64];
+            int depth;
         } variable_declaration;
 
         struct {
@@ -149,6 +155,7 @@ struct ASTNode {
 
         struct {
             char name[64];
+            char resolved_name[64];
         } variable;
 
         struct {
@@ -162,6 +169,38 @@ struct ASTNode {
     } as;
 };
 
+
+#define MAX_SCOPE_DECLARATIONS 100
+
+//绑定栈
+typedef struct VariableBinding {
+    int symbol_id;
+    int depth;
+    char resolved_name[64];
+    struct VariableBinding *previous;
+} VariableBinding;
+
+//同一个变量名以及对应的栈顶
+typedef struct VariableEntry {
+    char name[64];
+    VariableBinding *top;
+} VariableEntry;
+
+//作用域帧，录本作用域声明了哪些变量，并指向父作用域。
+typedef struct ScopeFrame {
+    VariableEntry *declared_entries[MAX_SCOPE_DECLARATIONS];//本作用域内声明过的变量名条目指针数组
+    int declaration_count;//本作用域声明了多少个变量
+    struct ScopeFrame *parent;//指向外层作用域帧，形成作用域链
+} ScopeFrame;
+
+//符号表
+typedef struct {
+    VariableEntry entries[MAX_VARIABLES];//所有变量名条目
+    int entry_count;//已经用了多少个变量名条目
+    int next_symbol_id;//下一个可用的符号 ID，每压入一个绑定就分配一个
+    int depth;
+    ScopeFrame *current_scope;//当前作用域帧
+} SymbolTable;
 
 typedef struct {
     char name[MAX_NAME_LEN + 1];
@@ -928,8 +967,7 @@ static ASTNode *parse_variable_declaration(Parser *parser)
      */
     if (parser_match(parser, TOKEN_ASSIGN))
     {
-        initializer =
-            parse_expression(parser);
+        initializer = parse_expression(parser);
     }
 
     parser_expect(
@@ -1636,39 +1674,287 @@ static int write_file(char* new_value, char* file_name)
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-/* ================= AST -> IR -> x86-64 Assembly ================= */
+/* ================= Scope analysis ================= */
 
+//初始化符号表
+static void symbol_table_init(SymbolTable *table)
+{
+    memset(table, 0, sizeof(*table));
+}
+
+//符号表中查找变量条目，并返回
+static VariableEntry *symbol_find_entry(SymbolTable *table, const char *name)
+{
+    int i;
+    for (i = 0; i < table->entry_count; i++)
+    {
+        if (strcmp(table->entries[i].name, name) == 0) return &table->entries[i];
+    }
+    return NULL;
+}
+
+//符号表中查找变量条目，找不到就创建一个
+static VariableEntry *symbol_get_or_create_entry(SymbolTable *table, const char *name)
+{
+    VariableEntry *entry = symbol_find_entry(table, name);
+
+    if (entry != NULL) return entry;
+
+    //防止超100
+    if (table->entry_count >= MAX_VARIABLES) {
+        fprintf(stderr, "语义错误：变量名称超过 %d 个\n", MAX_VARIABLES);
+        exit(EXIT_FAILURE);
+    }
+
+    //创建新的变量条目
+    entry = &table->entries[table->entry_count++];
+    snprintf(entry->name, sizeof(entry->name), "%s", name);
+    entry->top = NULL;
+    return entry;
+}
+
+//符号表作用域向内
+static void symbol_enter_scope(SymbolTable *table)
+{
+    ScopeFrame *scope = calloc(1, sizeof(*scope));
+    if (scope == NULL) {
+        fprintf(stderr, "作用域内存分配失败\n");
+        exit(EXIT_FAILURE);
+    }
+
+    scope->parent = table->current_scope;
+    table->current_scope = scope;
+    table->depth++;
+}
+
+//声明变量
+static VariableBinding *symbol_declare(SymbolTable *table, ASTNode *declaration)
+{
+    const char *name = declaration->as.variable_declaration.name;
+    VariableEntry *entry;
+    VariableBinding *binding;//链表
+    ScopeFrame *scope = table->current_scope;//当前作用域帧
+    //如果当前作用域没有
+    if (scope == NULL) {
+        fprintf(stderr, "语义错误：变量 %s 不在任何作用域中\n", name);
+        exit(EXIT_FAILURE);
+    }
+
+    //变量条目有链条并且条目的层级与当前相同则失败
+    entry = symbol_get_or_create_entry(table, name);
+    if (entry->top != NULL && entry->top->depth == table->depth) {
+        fprintf(stderr, "语义错误：第 %d 行变量 %s 在当前作用域重复声明\n",
+                declaration->token.line, name);
+        exit(EXIT_FAILURE);
+    }
+
+    //当前作用域声明变量不能超过100
+    if (scope->declaration_count >= MAX_SCOPE_DECLARATIONS) {
+        fprintf(stderr, "语义错误：单个作用域声明超过 %d 个变量\n",
+                MAX_SCOPE_DECLARATIONS);
+        exit(EXIT_FAILURE);
+    }
+
+    //链表创建失败
+    binding = calloc(1, sizeof(*binding));
+    if (binding == NULL) {
+        fprintf(stderr, "变量绑定内存分配失败\n");
+        exit(EXIT_FAILURE);
+    }
+
+    //填充绑定信息
+    binding->symbol_id = table->next_symbol_id++;
+    binding->depth = table->depth;
+    snprintf(binding->resolved_name, sizeof(binding->resolved_name),
+             "v%d", binding->symbol_id);
+
+    /* 链表头是栈顶，新绑定遮蔽原来的外层绑定。 */
+    //压入绑定栈
+    binding->previous = entry->top;
+    entry->top = binding;
+
+    //记录到当前作用域帧
+    scope->declared_entries[scope->declaration_count++] = entry;
+
+    //回填给ASTNode
+    declaration->as.variable_declaration.depth = table->depth;
+    snprintf(declaration->as.variable_declaration.resolved_name,
+             sizeof(declaration->as.variable_declaration.resolved_name),
+             "%s", binding->resolved_name);
+    return binding;
+}
+
+//出现一个变量名时，检查它是否已声明、当前是否可见，并返回对应的绑定。
+static VariableBinding *symbol_lookup(SymbolTable *table, ASTNode *variable)
+{
+    VariableEntry *entry = symbol_find_entry(table, variable->as.variable.name);
+    if (entry == NULL || entry->top == NULL) {
+        fprintf(stderr,
+                "语义错误：第 %d 行变量 %s 尚未声明或已离开作用域\n",
+                variable->token.line, variable->as.variable.name);
+        exit(EXIT_FAILURE);
+    }
+    return entry->top;
+}
+
+//退出当前
+static void symbol_leave_scope(SymbolTable *table)
+{
+    ScopeFrame *scope = table->current_scope;
+    int i;
+
+    if (scope == NULL) {
+        fprintf(stderr, "内部错误：作用域栈为空\n");
+        exit(EXIT_FAILURE);
+    }
+
+    for (i = scope->declaration_count - 1; i >= 0; i--) {
+        VariableEntry *entry = scope->declared_entries[i];
+        VariableBinding *binding = entry->top;
+        entry->top = binding->previous;
+        free(binding);
+    }
+
+    table->current_scope = scope->parent;
+    table->depth--;
+    free(scope);
+}
+
+static void semantic_analyze_expression(SymbolTable *table, ASTNode *node);
+static void semantic_analyze_statement(SymbolTable *table, ASTNode *node);
+
+static void semantic_analyze_expression(SymbolTable *table, ASTNode *node)
+{
+    ASTNodeList *argument;
+    VariableBinding *binding;
+
+    if (node == NULL) return;
+
+    switch (node->type) {
+        case AST_NUMBER:
+            break;
+        case AST_VARIABLE:
+            binding = symbol_lookup(table, node);
+            snprintf(node->as.variable.resolved_name,
+                     sizeof(node->as.variable.resolved_name),
+                     "%s", binding->resolved_name);
+            break;
+        case AST_BINARY:
+            semantic_analyze_expression(table, node->as.binary.left);
+            semantic_analyze_expression(table, node->as.binary.right);
+            break;
+        case AST_CALL:
+            argument = node->as.call.arguments;
+            while (argument != NULL) {
+                semantic_analyze_expression(table, argument->node);
+                argument = argument->next;
+            }
+            break;
+        default:
+            fprintf(stderr, "语义错误：节点不是表达式\n");
+            exit(EXIT_FAILURE);
+    }
+}
+
+static void semantic_analyze_block(SymbolTable *table, ASTNode *block)
+{
+    ASTNodeList *statement;
+
+    symbol_enter_scope(table);
+    statement = block->as.block.statements;
+    while (statement != NULL) {
+        semantic_analyze_statement(table, statement->node);
+        statement = statement->next;
+    }
+    symbol_leave_scope(table);
+}
+
+static void semantic_analyze_statement(SymbolTable *table, ASTNode *node)
+{
+    if (node == NULL) return;
+
+    switch (node->type) {
+        case AST_BLOCK:
+            semantic_analyze_block(table, node);
+            break;
+        case AST_VAR_DECL:
+            symbol_declare(table, node);
+            semantic_analyze_expression(table, node->as.variable_declaration.initializer);
+            break;
+        case AST_ASSIGN:
+            semantic_analyze_expression(table, node->as.assignment.target);
+            semantic_analyze_expression(table, node->as.assignment.value);
+            break;
+        case AST_IF:
+            semantic_analyze_expression(table, node->as.if_statement.condition);
+            semantic_analyze_statement(table, node->as.if_statement.then_branch);
+            semantic_analyze_statement(table, node->as.if_statement.else_branch);
+            break;
+        case AST_WHILE:
+            semantic_analyze_expression(table, node->as.while_statement.condition);
+            semantic_analyze_statement(table, node->as.while_statement.body);
+            break;
+        case AST_RETURN:
+            semantic_analyze_expression(table, node->as.return_statement.value);
+            break;
+        case AST_EXPR_STMT:
+            semantic_analyze_expression(table, node->as.expression_statement.expression);
+            break;
+        default:
+            fprintf(stderr, "语义错误：节点不是语句\n");
+            exit(EXIT_FAILURE);
+    }
+}
+
+static void semantic_analyze_program(ASTNode *program)
+{
+    SymbolTable table;
+    ASTNodeList *function;
+
+    symbol_table_init(&table);
+    function = program->as.program.functions;
+    while (function != NULL) {
+        semantic_analyze_statement(&table, function->node->as.function.body);
+        function = function->next;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/* ================= AST -> IR -> x86-64 Assembly ================= */
+//IR表示为中间代码
 typedef enum {
-    IR_LABEL,
-    IR_ASSIGN,
-    IR_BINARY,
-    IR_GOTO,
-    IR_IF_FALSE,
-    IR_RETURN,
-    IR_PRINT
+    IR_LABEL,//跳转标签
+    IR_ASSIGN,//赋值
+    IR_BINARY,//二元运算
+    IR_GOTO,//无条件跳转
+    IR_IF_FALSE,//条件为假时跳转
+    IR_RETURN,//函数返回
+    IR_PRINT//输出整数
 } IRKind;
 
+//result = arg1 operator arg2
+//if_false t0 goto L1
 typedef struct IRInstruction {
-    IRKind kind;
+    IRKind kind;//指令类型
 
-    char result[64];
-    char arg1[64];
+    char result[64];//结果，目标
+    char arg1[64];//源操作数
     char arg2[64];
 
-    TokenType operator;
+    TokenType operator;//运算符
 
-    struct IRInstruction *next;
-} IRInstruction;
+    struct IRInstruction *next;//下一条IR指令
+} IRInstruction;//一条指令
 
 typedef struct {
     IRInstruction *head;
     IRInstruction *tail;
 
-    int temp_count;
-    int label_count;
+    int temp_count;//临时变量编号
+    int label_count;//临时标签编号
 } IRProgram;
 
-static void ir_init(IRProgram *ir)
+static void ir_init(IRProgram *ir)//初始化IR
 {
     memset(ir, 0, sizeof(IRProgram));
 }
@@ -1680,7 +1966,7 @@ static void ir_emit(
     const char *arg1,
     const char *arg2,
     TokenType operator
-)
+)//把IR追加到链表
 {
     IRInstruction *instruction =
         calloc(1, sizeof(IRInstruction));
@@ -1692,12 +1978,13 @@ static void ir_emit(
 
     instruction->kind = kind;
     instruction->operator = operator;
-
+    //snprintf防止内存溢出
     snprintf(
         instruction->result,
         sizeof(instruction->result),
         "%s",
         result == NULL ? "" : result
+        //如果result是NULL就用""占位，如果不是就原值
     );
 
     snprintf(
@@ -1714,6 +2001,7 @@ static void ir_emit(
         arg2 == NULL ? "" : arg2
     );
 
+    //类似ast的链表，但是比ast的链表更适合插入
     if (ir->head == NULL) {
         ir->head = instruction;
     } else {
@@ -1723,75 +2011,35 @@ static void ir_emit(
     ir->tail = instruction;
 }
 
-static void ir_new_temp(
-    IRProgram *ir,
-    char *buffer,
-    size_t buffer_size
-)
+static void ir_new_temp(IRProgram *ir, char *buffer, size_t buffer_size)
 {
-    snprintf(
-        buffer,
-        buffer_size,
-        "t%d",
-        ir->temp_count++
-    );
+    snprintf(buffer, buffer_size, "t%d", ir->temp_count++);
 }
 
-static void ir_new_label(
-    IRProgram *ir,
-    char *buffer,
-    size_t buffer_size
-)
+static void ir_new_label(IRProgram *ir, char *buffer, size_t buffer_size)
 {
-    snprintf(
-        buffer,
-        buffer_size,
-        "L%d",
-        ir->label_count++
-    );
+    snprintf(buffer, buffer_size, "L%d", ir->label_count++);
 }
 
 static const char *ir_operator_name(TokenType type)
 {
     switch (type) {
-        case TOKEN_PLUS:
-            return "+";
-
-        case TOKEN_MINUS:
-            return "-";
-
-        case TOKEN_STAR:
-            return "*";
-
-        case TOKEN_SLASH:
-            return "/";
-
-        case TOKEN_PERCENT:
-            return "%";
-
-        case TOKEN_EQUAL:
-            return "==";
-
-        case TOKEN_NOT_EQUAL:
-            return "!=";
-
-        case TOKEN_LESS:
-            return "<";
-
-        case TOKEN_LESS_EQUAL:
-            return "<=";
-
-        case TOKEN_GREATER:
-            return ">";
-
-        case TOKEN_GREATER_EQUAL:
-            return ">=";
-
-        default:
-            return "?";
+        case TOKEN_PLUS: return "+";
+        case TOKEN_MINUS: return "-";
+        case TOKEN_STAR: return "*";
+        case TOKEN_SLASH: return "/";
+        case TOKEN_PERCENT: return "%";
+        case TOKEN_EQUAL: return "==";
+        case TOKEN_NOT_EQUAL: return "!=";
+        case TOKEN_LESS: return "<";
+        case TOKEN_LESS_EQUAL: return "<=";
+        case TOKEN_GREATER: return ">";
+        case TOKEN_GREATER_EQUAL: return ">=";
+        default: return "?";
     }
 }
 
+//打印IR
 static void ir_print(const IRProgram *ir)
 {
     const IRInstruction *current = ir->head;
@@ -1847,31 +2095,20 @@ static void ir_print(const IRProgram *ir)
 
 /* ---------- AST 转 IR ---------- */
 
-static void ir_generate_expression(
-    IRProgram *ir,
-    ASTNode *node,
-    char *result,
-    size_t result_size
-);
+static void ir_generate_expression(IRProgram *ir, ASTNode *node, char *result, size_t result_size);
 
-static void ir_generate_statement(
-    IRProgram *ir,
-    ASTNode *node
-);
+static void ir_generate_statement(IRProgram *ir, ASTNode *node);
 
-static void ir_generate_expression(
-    IRProgram *ir,
-    ASTNode *node,
-    char *result,
-    size_t result_size
-)
+static void ir_generate_expression(IRProgram *ir, ASTNode *node, char *result, size_t result_size)
 {
-    if (node == NULL) {
+    if (node == NULL)
+    {
         fprintf(stderr, "IR 错误：表达式为空\n");
         exit(EXIT_FAILURE);
     }
 
-    switch (node->type) {
+    switch (node->type)
+    {
         case AST_NUMBER:
             snprintf(
                 result,
@@ -1886,14 +2123,16 @@ static void ir_generate_expression(
                 result,
                 result_size,
                 "%s",
-                node->as.variable.name
+                node->as.variable.resolved_name
             );
             break;
+        
 
+        //二元运算就遍历他的子节点
         case AST_BINARY: {
             char left[64];
             char right[64];
-
+            //把变量或者数字存入left right当中
             ir_generate_expression(
                 ir,
                 node->as.binary.left,
@@ -1908,20 +2147,9 @@ static void ir_generate_expression(
                 sizeof(right)
             );
 
-            ir_new_temp(
-                ir,
-                result,
-                result_size
-            );
+            ir_new_temp(ir, result, result_size);
 
-            ir_emit(
-                ir,
-                IR_BINARY,
-                result,
-                left,
-                right,
-                node->as.binary.operator
-            );
+            ir_emit(ir, IR_BINARY, result, left, right, node->as.binary.operator);
 
             break;
         }
@@ -1932,52 +2160,45 @@ static void ir_generate_expression(
     }
 }
 
-static void ir_generate_block(
-    IRProgram *ir,
-    ASTNode *block
-)
+//遍历代码块当中的语句
+static void ir_generate_block(IRProgram *ir, ASTNode *block)
 {
-    ASTNodeList *current =
-        block->as.block.statements;
+    ASTNodeList *current = block->as.block.statements;
 
-    while (current != NULL) {
+    while (current != NULL)
+    {
         ir_generate_statement(ir, current->node);
         current = current->next;
     }
 }
-
-static void ir_generate_statement(
-    IRProgram *ir,
-    ASTNode *node
-)
+//生成语句IR
+static void ir_generate_statement(IRProgram *ir,ASTNode *node)
 {
-    if (node == NULL) {
-        return;
-    }
+    if (node == NULL) return;
 
     switch (node->type) {
         case AST_BLOCK:
             ir_generate_block(ir, node);
             break;
-
-        case AST_VAR_DECL: {
-            if (
-                node->as.variable_declaration.initializer
-                != NULL
-            ) {
+        //变量声明时候
+        case AST_VAR_DECL:
+        {
+            if (node->as.variable_declaration.initializer != NULL)
+            {
                 char value[64];
-
+                //运算
                 ir_generate_expression(
                     ir,
                     node->as.variable_declaration.initializer,
                     value,
                     sizeof(value)
                 );
-
+                
+                //变量名字以及值
                 ir_emit(
                     ir,
                     IR_ASSIGN,
-                    node->as.variable_declaration.name,
+                    node->as.variable_declaration.resolved_name,
                     value,
                     NULL,
                     TOKEN_EOF
@@ -1987,6 +2208,7 @@ static void ir_generate_statement(
             break;
         }
 
+        //给变量赋值
         case AST_ASSIGN: {
             char value[64];
 
@@ -2001,7 +2223,7 @@ static void ir_generate_statement(
                 ir,
                 IR_ASSIGN,
                 node->as.assignment.target
-                    ->as.variable.name,
+                    ->as.variable.resolved_name,
                 value,
                 NULL,
                 TOKEN_EOF
@@ -2032,9 +2254,9 @@ static void ir_generate_statement(
             break;
         }
 
+        //目前只实现了对函数的调用
         case AST_EXPR_STMT: {
-            ASTNode *expression =
-                node->as.expression_statement.expression;
+            ASTNode *expression = node->as.expression_statement.expression;
 
             if (
                 expression->type == AST_CALL &&
@@ -2243,15 +2465,13 @@ static void ir_generate_statement(
     }
 }
 
-static void ir_generate_program(
-    IRProgram *ir,
-    ASTNode *program
-)
+//开始遍历
+static void ir_generate_program(IRProgram *ir, ASTNode *program)
 {
-    ASTNodeList *functions =
-        program->as.program.functions;
+    ASTNodeList *functions = program->as.program.functions;
 
-    while (functions != NULL) {
+    while (functions != NULL)
+    {
         ASTNode *function = functions->node;
 
         ir_generate_statement(
@@ -2728,6 +2948,8 @@ int main(void)
 
     program = parse_program(&parser);
 
+    semantic_analyze_program(program);
+
     ir_init(&ir);
 
     ir_generate_program(
@@ -2758,7 +2980,7 @@ int main(void)
     fclose(output);
     free((void *)source);
 
-    printf("over：output.s\n");
+    printf("over:output.s\n");
 
     return EXIT_SUCCESS;
 }
